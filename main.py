@@ -31,7 +31,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- মেইন মেনু কিবোর্ড ---
+# --- মেনু কিবোর্ড ---
 def main_menu():
     keyboard = [
         [InlineKeyboardButton("👤 একাউন্ট", callback_data='account'), InlineKeyboardButton("👥 রেফার", callback_data='refer')],
@@ -62,65 +62,80 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u_id = query.from_user.id
     await query.answer()
 
+    # মেইন মেনু
     if query.data == 'main_menu':
         context.user_data['state'] = None
         await query.edit_message_text("একটি অপশন বেছে নিন:", reply_markup=main_menu())
+
+    # রেফার বাটন (এখানেই আগে সমস্যা হচ্ছিল হয়তো)
+    elif query.data == 'refer':
+        bot_info = await context.bot.get_me()
+        ref_link = f"https://t.me/{bot_info.username}?start={u_id}"
+        text = f"👥 **রেফারেল কমিশন ১৫%**\n\nআপনার লিংক দিয়ে কেউ জয়েন করে প্যাকেজ কিনলে আপনি সরাসরি কমিশন পাবেন।\n\n🔗 **আপনার লিংক:**\n`{ref_link}`"
+        await query.edit_message_text(text, reply_markup=back_button(), parse_mode='Markdown')
+
+    # উত্তোলন বাটন
+    elif query.data == 'withdraw':
+        bd_tz = pytz.timezone('Asia/Dhaka')
+        now = datetime.now(bd_tz)
+        if 12 <= now.hour < 22:
+            await query.edit_message_text("💸 **কত টাকা তুলতে চান এবং কোন নাম্বারে?**\n\nবিস্তারিত লিখে পাঠান (যেমন: ৫০০৳ বিকাশ ০১৭...)", reply_markup=back_button(), parse_mode='Markdown')
+            context.user_data['state'] = 'waiting_with'
+        else:
+            await query.edit_message_text("❌ **উত্তোলন বর্তমানে বন্ধ!**\n\nউত্তোলনের সময়: দুপুর ১২টা থেকে রাত ১০টা।", reply_markup=back_button(), parse_mode='Markdown')
+
+    # একাউন্ট বাটন
+    elif query.data == 'account':
+        conn = sqlite3.connect('smart_nft.db')
+        d = conn.execute("SELECT balance, total_dep, total_with FROM users WHERE user_id=?", (u_id,)).fetchone()
+        conn.close()
+        await query.edit_message_text(f"👤 **ইউজার আইডি:** `{u_id}`\n💰 **ব্যালেন্স:** {d[0]}৳\n📥 **মোট ডিপোজিট:** {d[1]}৳\n📤 **মোট উত্তোলন:** {d[2]}৳", reply_markup=back_button(), parse_mode='Markdown')
+
+    # প্যাকেজ ও অন্যান্য বাটন (আগের মতো নিখুঁত রাখা হয়েছে)
+    elif query.data == 'packages':
+        kb = [[InlineKeyboardButton(f"🛒 কিনুন {val['display']} ({val['price']}৳)", callback_data=f"buy_{key}")] for key, val in PACKAGES.items()]
+        kb.append([InlineKeyboardButton("🔙 ফিরে যান", callback_data='main_menu')])
+        await query.edit_message_text("📦 **ইনভেস্টমেন্ট প্যাকেজসমূহ:**", reply_markup=InlineKeyboardMarkup(kb))
+    
+    elif query.data == 'deposit':
+        await query.edit_message_text("💰 **কত টাকা ডিপোজিট করতে চান?**\n(মিনিমাম ১০০০৳)", reply_markup=back_button())
+        context.user_data['state'] = 'ask_dep_amount'
 
     elif query.data == 'active_pkgs':
         conn = sqlite3.connect('smart_nft.db')
         pkgs = conn.execute("SELECT pkg_name, last_profit_time FROM investments WHERE user_id=?", (u_id,)).fetchall()
         conn.close()
-        
         if not pkgs:
-            await query.edit_message_text("❌ আপনার কোনো একটিভ প্যাকেজ নেই!", reply_markup=back_button())
+            await query.edit_message_text("❌ কোনো একটিভ প্যাকেজ নেই!", reply_markup=back_button())
         else:
-            text = "📊 **আপনার একটিভ প্যাকেজসমূহ:**\n\n"
+            text = "📊 **আপনার একটিভ প্যাকেজ:**\n\n"
             for p in pkgs:
-                name = PACKAGES[p[0]]['display']
-                last_time = datetime.strptime(p[1], '%Y-%m-%d %H:%M:%S')
-                next_time = last_time + timedelta(hours=72)
-                text += f"🔹 {name}\n🕒 পরবর্তী লাভ: `{next_time.strftime('%d-%m %I:%M %p')}`\n\n"
+                next_time = datetime.strptime(p[1], '%Y-%m-%d %H:%M:%S') + timedelta(hours=72)
+                text += f"🔹 {PACKAGES[p[0]]['display']}\n🕒 লাভ আসবে: `{next_time.strftime('%d-%m %I:%M %p')}`\n\n"
             await query.edit_message_text(text, reply_markup=back_button(), parse_mode='Markdown')
 
-    elif query.data == 'packages':
-        kb = [[InlineKeyboardButton(f"🛒 কিনুন {val['display']} ({val['price']}৳)", callback_data=f"buy_{key}")] for key, val in PACKAGES.items()]
-        kb.append([InlineKeyboardButton("🔙 ফিরে যান", callback_data='main_menu')])
-        await query.edit_message_text("📦 **ইনভেস্টমেন্ট প্যাকেজসমূহ (৭২ ঘণ্টা পর লাভ):**", reply_markup=InlineKeyboardMarkup(kb))
-
+    # প্যাকেজ কেনার লজিক ও ১৫% রেফার কমিশন
     elif query.data.startswith("buy_"):
         pkg_key = query.data.replace("buy_", "")
         pkg = PACKAGES[pkg_key]
         conn = sqlite3.connect('smart_nft.db')
         user_info = conn.execute("SELECT balance, referred_by FROM users WHERE user_id=?", (u_id,)).fetchone()
-        
         if user_info[0] >= pkg['price']:
             conn.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (pkg['price'], u_id))
             conn.execute("INSERT INTO investments (user_id, pkg_name, amount, last_profit_time) VALUES (?,?,?,?)", 
                          (u_id, pkg_key, pkg['price'], datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-            # রেফার কমিশন (১৫%)
+            # রেফার কমিশন
             ref_id = user_info[1]
             if ref_id and ref_id != 0:
                 comm = pkg['price'] * 0.15
                 conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (comm, ref_id))
-                try: await context.bot.send_message(chat_id=ref_id, text=f"🎉 কমিশন পেয়েছেন! আপনার রেফারেল {pkg['display']} কিনেছে।")
+                try: await context.bot.send_message(chat_id=ref_id, text=f"🎉 আপনার রেফারেল প্যাকেজ কিনেছে! আপনি {comm}৳ কমিশন পেয়েছেন।")
                 except: pass
             conn.commit()
-            await query.edit_message_text(f"✅ সফল! {pkg['display']} একটিভ হয়েছে।", reply_markup=back_button())
+            await query.edit_message_text(f"✅ সফল! {pkg['display']} কেনা হয়েছে।", reply_markup=back_button())
         else:
-            await query.edit_message_text("❌ পর্যাপ্ত ব্যালেন্স নেই!", reply_markup=back_button())
+            await query.edit_message_text("❌ ব্যালেন্স নেই!", reply_markup=back_button())
         conn.close()
-
-    elif query.data == 'deposit':
-        await query.edit_message_text("💰 **কত টাকা ডিপোজিট করতে চান লিখুন?**\n(সর্বনিম্ন ১০০০৳)", reply_markup=back_button())
-        context.user_data['state'] = 'ask_dep_amount'
-
-    elif query.data == 'account':
-        conn = sqlite3.connect('smart_nft.db')
-        d = conn.execute("SELECT balance, total_dep, total_with FROM users WHERE user_id=?", (u_id,)).fetchone()
-        conn.close()
-        await query.edit_message_text(f"👤 আইডি: `{u_id}`\n💰 ব্যালেন্স: {d[0]}৳\n📥 ডিপোজিট: {d[1]}৳\n📤 উত্তোলন: {d[2]}৳", reply_markup=back_button(), parse_mode='Markdown')
-
-    # ... অন্যান্য বাটন (Refer, Withdraw) আগের মতোই কাজ করবে ...
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u_id = update.effective_user.id
@@ -130,15 +145,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == 'ask_dep_amount':
         if msg.isdigit() and int(msg) >= 1000:
             context.user_data['dep_amount'] = msg
-            await update.message.reply_text(f"✅ {msg}৳ ডিপোজিট করতে নিচের নাম্বারে টাকা পাঠান:\n\n🔸 বিকাশ: `{BIKASH_NO}`\n🔸 নগদ: `{NAGAD_NO}`\n\nটাকা পাঠিয়ে আপনার **TrxID** লিখুন।", reply_markup=back_button(), parse_mode='Markdown')
+            await update.message.reply_text(f"✅ পরিমাণ: {msg}৳\n\n💰 **টাকা পাঠান (Personal):**\n🔸 বিকাশ: `{BIKASH_NO}`\n🔸 নগদ: `{NAGAD_NO}`\n\nপাঠিয়ে **TrxID** লিখুন।", parse_mode='Markdown', reply_markup=back_button())
             context.user_data['state'] = 'waiting_trx'
         else:
-            await update.message.reply_text("❌ সর্বনিম্ন ১০০০৳ হতে হবে। আবার পরিমাণ লিখুন।")
+            await update.message.reply_text("❌ সর্বনিম্ন ১০০০৳ হতে হবে।")
 
     elif state == 'waiting_trx':
         amount = context.user_data.get('dep_amount')
-        await context.bot.send_message(chat_id=ADMIN_ID, text=f"📥 **ডিপোজিট রিকোয়েস্ট!**\nID: `{u_id}`\nপরিমাণ: {amount}৳\nTrxID: {msg}\n\n`/add {u_id} {amount}`")
-        await update.message.reply_text("✅ তথ্য জমা হয়েছে। দ্রুত চেক করা হবে।", reply_markup=back_button())
+        await context.bot.send_message(chat_id=ADMIN_ID, text=f"📥 **ডিপোজিট রিকোয়েস্ট!**\nID: `{u_id}`\nটাকা: {amount}৳\nTrxID: {msg}\n\n`/add {u_id} {amount}`")
+        await update.message.reply_text("✅ তথ্য পাঠানো হয়েছে।", reply_markup=back_button())
+        context.user_data['state'] = None
+
+    elif state == 'waiting_with':
+        await context.bot.send_message(chat_id=ADMIN_ID, text=f"💸 **উত্তোলন রিকোয়েস্ট!**\nID: `{u_id}`\nতথ্য: {msg}")
+        await update.message.reply_text("✅ আপনার উত্তোলনের তথ্য অ্যাডমিনকে জানানো হয়েছে।", reply_markup=back_button())
         context.user_data['state'] = None
 
 async def add_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -150,8 +170,8 @@ async def add_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         await update.message.reply_text(f"✅ আইডি {t_id} তে {amt}৳ অ্যাড হয়েছে।")
-        await context.bot.send_message(chat_id=t_id, text=f"🎉 আপনার একাউন্টে {amt}৳ অ্যাড করা হয়েছে।")
-    except: await update.message.reply_text("ভুল! লিখুন: `/add আইডি টাকা`")
+        await context.bot.send_message(chat_id=t_id, text=f"🎉 একাউন্টে {amt}৳ অ্যাড করা হয়েছে।")
+    except: await update.message.reply_text("লিখুন: `/add আইডি টাকা`")
 
 def main():
     init_db()
